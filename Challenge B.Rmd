@@ -1,0 +1,354 @@
+---
+title: "Challenge B"
+author: "Philip Petersen (github.com/philipjadach), Bastian Lippmann (github.com/bastilip) Carles Mano (github.com/carlesmano)"
+date: "December 8, 2017" 
+fontsize: 11pt
+geometry: margin=1in
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, tidy.opts=list(width.cutoff= 80))
+```
+
+
+## Task 1B - Predicting house prices in Ames, Iowa
+
+### Step 1
+We choose a random forest method. Random Forests considers two types of "trees"; classification and regression trees. Thereby Random Forest is an ensemble learning method for classification and regression trees. In a regression tree the dependent variable is continuoues, and in a classification tree the dependent variable is discrete. Random Forests correct for the habbit of the decision trees to overfit to their training set.
+
+
+### Step 2
+
+```{r, include=FALSE}
+library(randomForest)
+library("tidyverse")
+library(ggplot2)
+```
+
+```{r downloading data, echo=FALSE}
+train <- read.csv(file="train.csv", header=TRUE, quote="",sep=",")
+test <- read.csv(file="test.csv", header = TRUE, quote="", sep = ",")
+```
+
+Before testing the random forest method on the training we want to get rid of variables with a lot of missing data. We also want to get rid of the variabel $Id$. 
+
+```{r excluding id}
+train1 <- names(train) %in% c("Id") 
+train_without_id <- train[!train1]
+```
+
+Now the variable $Id$ is no longer a part of the train dataset. Hereby we can use the random forest method on the new dataset. 
+Not only do we have to remove the variable $Id$, but we also have to get rid of any missing values. If the variables have a lot of missing values, then we will get rid of these variables in the dataset. 
+
+Here we want to remove all variables, which have more than 100 missing observations. After that we summarise our dataset to see is there is still some missing observations left. 
+
+```{r missing values, echo=FALSE}
+remove.vars <- train_without_id %>% summarise_all(.funs = funs(sum(is.na(.)))) %>% gather(key = "feature", value = "missing.observations") %>% filter(missing.observations > 100) %>% select(feature) %>% unlist
+
+train_without_id <- train_without_id %>% select(- one_of(remove.vars))
+
+train_without_id %>% summarise_all(.funs = funs(sum(is.na(.)))) %>% gather(key = "feature", value = "missing.observations") %>% filter(missing.observations > 0)
+
+train_without_id <- train_without_id %>% filter(is.na(GarageType) == FALSE, is.na(MasVnrType) == FALSE, is.na(BsmtFinType2) == FALSE, is.na(BsmtExposure) == FALSE, is.na(Electrical) == FALSE)
+```
+
+The answer here is yes, and we therefore remove the missing observations. Finally, we check to see if the dataset is all clean, and the result indicates that there are no rows left with missing observations.  
+
+```{r check if no missing obs., echo=FALSE}
+train_without_id %>% summarise_all(.funs = funs(sum(is.na(.)))) %>% gather(key = "feature", value = "missing.observations") %>% filter(missing.observations > 0)
+```
+
+After taking the missing values out of the dataset, we now return to our random forest method. Before testing the random forest method we first set a seed. Now we can test the random forest method on our data set, and this gives us the following: 
+  
+  ```{r things for machine learning, include=FALSE}
+library("caret")
+```
+
+```{r rf method, echo=FALSE}
+names(train_without_id)=make.names(names(train_without_id))
+
+set.seed(7)
+train.rf <- randomForest(SalePrice~., data=train_without_id, importance=FALSE)
+print(train.rf)
+```
+
+We can see that after testing the random forest method on our data, we can explain 87.28% of the variables. 
+
+
+### Step 3
+Firstly, we run a linear regression with $SalePrice$ as our dependent variable. Next, we want to keep the variables in the linear regression model that have coefficients significant at the 1% level.
+
+```{r lm model, include=FALSE}
+lm_model <- lm(SalePrice~., data=train_without_id)
+summary(lm_model)
+sum_lm_model <- summary(lm_model)$coefficients
+class(sum_lm_model)
+significant.vars <- row.names(sum_lm_model[sum_lm_model[,4] <= 0.01,]) #here we choose the variables that have coefficients significant at the 1% level
+```
+
+This gives us a smaller regression model where the dependent variable is still $SalePrice$ and we choose the variables in our model as $MSZoning, LotArea, Neighborhood, YearBuilt, OverallQual$. This linear regression model gives an $R^2$ above 70%. This can be seen from result below:
+  
+```{r lm model 2, echo=FALSE}
+lm_model_2 <- lm(SalePrice ~ MSZoning + LotArea + Neighborhood  + YearBuilt + OverallQual, data = train_without_id)
+summary(lm_model_2)
+```
+
+After defining a linear regression model, we now want make predictions of the random forest method on the test data. We therefore download the test data, and make the predictions. Next, we make a plot to compare the predictions of random forest and the linear regression. 
+
+```{r predictions, echo=FALSE}
+prediction_lm <- predict(lm_model_2)
+prediction_rf <- predict(train.rf, data=test)
+
+data_predictions <- data_frame(prediction_lm, prediction_rf)
+
+ggplot(data=data_predictions, aes(x=prediction_lm,y=prediction_rf)) + 
+  geom_point() + 
+  geom_smooth(se=0, col="green") + 
+  geom_smooth(method="lm", se=0, col="red") + 
+  ggtitle("Scatterplot of the predictions with regression line")
+```
+
+
+
+
+## Task 2B - Overfitting in Machine Learning
+
+```{r packages, include=FALSE}
+library(np)
+library(caret)
+```
+
+### Step 1
+```{r simulating data, include=FALSE}
+set.seed(1)
+
+x <- rnorm(150)
+e <- rnorm(150)
+y <- x^3 + e 
+
+Data <- data.frame(x,y)
+training_index <- createDataPartition(Data$y, p=.8, list = FALSE)
+test_set <- slice(Data, -training_index)
+training_set <- slice(Data, training_index)
+```
+
+We estimate the low-flexibility local linear model on the training data with a bandwith on 0.5. Here we also calculate the fitted values for this model, which we are going to use later in step 3 to make the plot. When estimating this model we get and $R^2$ of approximately 85%. 
+
+```{r model low on train, echo=FALSE}
+ll.fit.lowflex <- npreg(y~x, data = training_set , bws = 0.5, regtype = "ll")
+summary(ll.fit.lowflex)
+y1fit <- fitted.values(ll.fit.lowflex)
+df_y1fit <- data.frame(y1fit)
+```
+
+
+### Step 2
+
+We estimate the high-flexibility local linear model on the training data with a bandwith on 0.01. When estimating this model we get an $R^2$ of approximately 97%.
+
+```{r model high on train, echo=FALSE}
+ll.fit.highflex <- npreg(y~x, data = training_set, bws = 0.01, regtype = "ll")
+summary(ll.fit.highflex)
+y2fit <- fitted.values(ll.fit.highflex)
+df_y2fit <- data.frame(y2fit)
+```
+
+
+### Step 3
+
+After estimating both the high- and low-flexibility local linear model, we try to make the scatterplot of x-y along with the calculated fitted values of the two models. 
+
+```{r scatterplot train data, echo=FALSE}
+x1 <- training_set[,1]
+
+
+fitlow <- cbind(x1,df_y1fit)
+fithigh <- cbind(x1,df_y2fit)
+
+ggplot(training_set)+
+  geom_point(aes(x,y),data=training_set)+
+  geom_smooth(aes(x=x,y=y),se=0, data = training_set, color="black")+
+  geom_line(aes(x=x1,y=y1fit), data = fitlow, color="red")+
+  geom_line(aes(x=x1,y=y2fit),data=fithigh, colour="blue")+
+  ggtitle("Figure 1: Step 3")
+```
+
+
+### Step 4
+
+You can see from figure 1 above, that the high-flexibility local linear model (blue line) has the least bias. This model has a lot of variance. It is typically this bias-variance trade off one has to face when working on non-parametric estimation. Here it is the choice of the bandwidth which makes the blue line more gittery - it is over-fitting the data. 
+So one has to keep in mind to balance this bias-variance trade-off. Bias occurs if the bandwidth is high, and variance if the bandwidth is low. 
+A method of choosing the right number of bandwidth can be The Jackknife Cross-Validation Method. Here you have a cross-validation function, and the right number of bandwidths to use, is the number that minimizes this cross-validation function. 
+
+
+### Step 5
+
+Now we turn to the same problem as in step 3, but instead we consider the test data. This means that we first estimate the high- and low-flexibility local linear model on the test data before making the plot. Again we also calculate the fitted values of the two models on the test data. After doing this, we can now make the scatterplot. 
+
+```{r model low on test, include=FALSE}
+ll.fit.lowflex_test <- npreg(y~x, data = test_set , bws = 0.5, regtype = "ll")
+summary(ll.fit.lowflex_test)
+y1fit_test <- fitted.values(ll.fit.lowflex_test)
+df_y1fit_test <- data.frame(y1fit_test)
+```
+
+```{r model high on test, include=FALSE}
+ll.fit.highflex_test <- npreg(y~x, data = test_set, bws = 0.01, regtype = "ll")
+summary(ll.fit.highflex_test)
+y2fit_test <- fitted.values(ll.fit.highflex_test)
+df_y2fit_test <- data.frame(y2fit_test)
+```
+
+```{r scatterplot test data, echo=FALSE}
+x2 <- test_set[,1]
+
+fitlow_test <- cbind(x2,df_y1fit_test)
+fithigh_test <- cbind(x2,df_y2fit_test)
+
+ggplot(test_set)+
+  geom_point(aes(x,y),data=test_set)+
+  geom_smooth(aes(x=x,y=y),se=0, data = test_set, color="black")+
+  geom_line(aes(x=x2,y=y1fit_test),data=fitlow_test, colour="red")+
+  geom_line(aes(x=x2,y=y2fit_test),data=fithigh_test, colour="blue")+
+  ggtitle("Figure 2: Step 5")
+```
+
+
+### Step 6
+
+We create a vector going from 0.01 to 0.5 and every time add a step of 0.001. 
+
+```{r vector of bw}
+v <- seq(from = 0.01, to = 0.5, by=0.001)
+```
+
+
+### Step 7
+
+Here we estimate a local linear model on the training data with each bandwidth. We start by creating an empty list. In this list we want to store the output from our estimation. The estimation is such that we estimate the model for each bandwidth, and each estimation is being added into the list. So for everytime it runs the estimation for a new bandwidth the output is being added to the list. We do this by using a loop. The code is included here to illustrate this. 
+
+```{r estimation of model with bw}
+list_train <- list()
+v <- seq(from = 0.01, to = 0.5, by=0.001)
+for(i in v){
+  output_ll_train <- npreg(y~x, data = training_set, bws = i, regtype = "ll")
+  list_train[[length(list_train)+1]] <- output_ll_train
+}
+```
+
+
+### Step 8
+
+After estimating our model in step 7 we now want to focus on the MSE. From the estimation the MSE is included into the list we created before. Therefore, we want to create a vector from the list of each bandwidth, which only consists of the MSE. The code can be seen below. 
+
+```{r MSE train}
+vector_train <- c()
+for (i in 1:length(v)){
+  vector_train <- append(vector_train, list_train[[i]]$MSE)
+}
+```
+
+
+### Step 9
+
+We still have to have the model from step 7 in mind. This is still the model we are going to use to compute the MSE on the test data. Firstly, we have to make predictions from the model in step 7, but on the new data set (test data). This means we have to find $\hat{y}$ for each bandwidth. Finally, we create a vector of the MSE. But now we cannot simply find the MSE in a list compared to earlier. Therefore, we have to write the equation for the MSE into our code in order to create the vector. This can be seen from the code below: 
+  
+  ```{r MSE test}
+test_MSE <- c()
+for (i in 1:length(v)){
+  y_hat <- predict(object = list_train[[i]], newdata = test_set)
+  test_MSE <- append(test_MSE,mean((y_hat-test_set$y)^2))
+}
+```
+
+
+### Step 10
+
+After finding the MSE in both the training data and the test data, we can now draw both MSE in the same plot. 
+
+```{r scatterplot of MSE, echo=FALSE}
+data_frame_MSE <- data.frame(training_MSE = vector_train, test_MSE = test_MSE, bandwidth = v)
+
+ggplot(data=data_frame_MSE)+
+  geom_line(aes(x=bandwidth,y=training_MSE), color="blue")+
+  geom_line(aes(x=bandwidth, y=test_MSE), color="red")+
+  ggtitle("Figure 3: Step 10")
+```
+
+
+
+
+
+
+
+## Task 3B - Privacy regulation compliance in France
+
+### Step 1
+
+We looked on the website for the document, downloaded it and opened the file with the read() command.
+
+```{r downloading datafile }
+data_cnil <- read.csv(file="CNIL.csv", header=TRUE, quote="",sep=";")
+head(data_cnil)
+```
+
+## Step 2
+We created a new variable by splitting up the first two digits of the postal code and called it 
+"department".
+```{r creating department variable}
+twodigits <- t(sapply(data_cnil$Code_Postal, function(x) substring(x, first=c(1,2), last=c(2,4))))
+data_cnil1<- cbind(data_cnil, twodigits[,1])         
+colnames(data_cnil1)<-c( "SIREN","Responsable","Adresse","Code_Postal","Ville","NAF", 
+                         "TypeCIL","Portee","Department")
+```
+
+We remove any duplicates because we need just unique combinations
+
+```{r removing duplicates, echo=TRUE}
+data_cnil_unique <- unique(data_cnil1[c("SIREN","Department")])
+head(data_cnil_unique)
+```
+
+We want determine the amount of designated an CIL-responsible for each department by firm.
+Doing so using the unique function.
+
+```{r demanded table}
+table_uniq<- table(unlist(duplicated(data_cnil_unique$SIREN)))
+table_uniq 
+```
+
+So there are 17756 firms with one unique responisble, and 240 firms have one for two or more departemens.
+
+## Step 3
+
+First we have to import the SIREN dataset. Doing so by the read-command. By including some arguments in read-command we can reduce the working process. We plug in following arguments.
+
+``` {r Import SIREN}
+data_siren <- read.table(file ="siren.csv", header = TRUE,fill=TRUE, sep=";", na.strings = "EMPTY", strip.white = TRUE, comment.char="", stringsAsFactors = FALSE, nrows = 1048576)
+```
+
+We merge the list of CIL representatives and the SIREN data set by the variable "SIREN" since this variable is the same in the two data sets.
+
+
+```{r transforming to the same format}
+x<-data_cnil1
+y<-data_siren
+data_merge <- merge(x, y, by = "SIREN", all=FALSE)
+```
+
+Data_merge only contains the firms that have a cil representative in the data set SIREN. 
+
+## Step 4
+
+We simply plot a histogram by using the variable EFENCENT.  This works out since we only selected firms with CIL. See Appendix. 
+
+```{r histogram }
+histo <- transform(data_merge, EFENCENT = as.numeric(EFENCENT))
+hist(histo$EFENCENT, main= "Histogram for Size of firm that nominated a CIL", xlab="Number of Company's Employees")
+```
+
+## Appendx
+```{r Appendix}
+head(histo)
+```
